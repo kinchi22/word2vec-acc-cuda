@@ -1,2 +1,4 @@
 *.o
+*.bin
 word2vec
+demo-word-news.sh

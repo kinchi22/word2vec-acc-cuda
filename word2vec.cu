@@ -65,6 +65,70 @@ char *vocab_code, *d_vocab_code;
 int *d_table;
 real *d_syn0, *d_syn1, *d_expTable;
 
+__global__ void __sgNeg(const int window, const int layer1_size, const int negative, const int vocab_size, float alpha,
+		const float* __restrict__ expTable, const int* __restrict__ sen, const int* __restrict__ sentence_length,
+		float *syn1, float *syn0, const int *negSample)
+{
+	__shared__ float f[BLOCKSIZE/2], g;
+
+	int sentIdx_s = sentence_length[blockIdx.x];
+	int sentIdx_e = sentence_length[blockIdx.x + 1];
+
+	int _negSample[5];
+	for (int i=0; i<negative; i++) _negSample[i] = negSample[blockIdx.x * negative + i];
+
+	if (threadIdx.x < layer1_size) for (int sentPos = sentIdx_s; sentPos < sentIdx_e; sentPos++) {
+		int word = sen[sentPos];
+		if (word == -1) continue;
+		float neu1e = 0; 
+
+		for (int a=0; a<window*2+1; a++) if (a != window) {
+			int c = sentPos - window + a; 
+			if (c <  sentIdx_s) continue;
+			if (c >= sentIdx_e) continue;
+			int last_word = sen[c];
+			if (last_word == -1) continue;
+			int l1 = last_word * layer1_size;
+			neu1e = 0; 
+
+			for (int d=0; d<negative; d++) {
+				int target, label;
+				if (d == 0) {      // positive sample
+					target = word;
+					label = 1; 
+				} else {           // neative sample
+					if (_negSample[d-1] == 0)    target = (_negSample[d-1]*2514903917 + 11) % (vocab_size - 1) + 1; 
+					if (_negSample[d-1] == word) continue;
+					target = _negSample[d-1];
+					label = 0; 
+				}
+				int l2 = target * layer1_size;
+
+				if (threadIdx.x <  BLOCKSIZE/2) f[threadIdx.x] = syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
+				__syncthreads();
+				if (threadIdx.x >= BLOCKSIZE/2) f[threadIdx.x%(BLOCKSIZE/2)] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
+				__syncthreads();
+				for (int i=(BLOCKSIZE/4); i>0; i/=2) {
+					if(threadIdx.x < i) f[threadIdx.x] += f[i + threadIdx.x];
+					__syncthreads();
+				}
+
+				if (threadIdx.x == 0) { 
+					if      (f[0] >  MAX_EXP) g = (label - 1) * alpha;
+					else if (f[0] < -MAX_EXP) g = (label - 0) * alpha;
+					else g = (label - expTable[(int)((f[0]+MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))]) * alpha;
+				}
+				__syncthreads();
+
+				neu1e += g * syn1[threadIdx.x + l2]; 
+				atomicAdd(&syn1[threadIdx.x + l2], g * syn0[threadIdx.x + l1]);
+			}
+			atomicAdd(&syn0[threadIdx.x + l1], neu1e);
+		}
+	}    
+}
+
+
 __global__ void skip_gram_kernel(int window, int layer1_size, int negative, int hs, int table_size, int vocab_size, real alpha,
 		const real* __restrict__ expTable, const int* __restrict__ table, 
 		const int* __restrict__ vocab_codelen, const int* __restrict__ vocab_point, const char* __restrict__ vocab_code,
@@ -716,6 +780,14 @@ void TrainModelThread()
 			continue;
 		}
 
+		// Negative sampling in advance
+		int *negSample = (int *)malloc(cnt_sentence * negative * sizeof(int));
+		int *d_negSample;
+		// A sentence share negative samples
+		for (int i=0; i<cnt_sentence * negative; i++) negSample[i] = table[rand() % table_size];
+		checkCUDAerr(cudaMalloc(&d_negSample, cnt_sentence * negative * sizeof(int)));
+		checkCUDAerr(cudaMemcpyAsync(d_negSample, negSample, cnt_sentence * negative * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
+
 		int gridSize = cnt_sentence;
 		if (cbow) {
 			checkCUDAerr(cudaMemcpyAsync(d_sen + streamIdx*total_sent_len, sen, total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
@@ -727,10 +799,16 @@ void TrainModelThread()
 		} else {
 			checkCUDAerr(cudaMemcpyAsync(d_sen + streamIdx*total_sent_len, sen, total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
 			checkCUDAerr(cudaMemcpyAsync(d_sent_len + streamIdx*(cnt_sentence+1), sentence_length, (cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
-			skip_gram_kernel<<<gridSize, blockSize, 0, stream[streamIdx]>>>
-				(window, layer1_size, negative, hs, table_size, vocab_size, alpha,
-				 d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
-				 d_sen, d_sent_len, d_syn1, d_syn0);
+			if (negative == 5) {
+				__sgNeg<<<gridSize, blockSize, 0, stream[streamIdx]>>>
+					(window, layer1_size, negative, vocab_size, alpha,
+					 d_expTable, d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+			} else {
+				skip_gram_kernel<<<gridSize, blockSize, 0, stream[streamIdx]>>>
+					(window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+					 d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+					 d_sen, d_sent_len, d_syn1, d_syn0);
+			}
 		}
 		streamIdx = (streamIdx + 1) % num_streams;
 	}
