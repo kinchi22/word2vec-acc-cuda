@@ -128,7 +128,6 @@ __global__ void __sgNeg(const int window, const int layer1_size, const int negat
 	}    
 }
 
-
 __global__ void skip_gram_kernel(int window, int layer1_size, int negative, int hs, int table_size, int vocab_size, real alpha,
 		const real* __restrict__ expTable, const int* __restrict__ table, 
 		const int* __restrict__ vocab_codelen, const int* __restrict__ vocab_point, const char* __restrict__ vocab_code,
@@ -678,6 +677,41 @@ void InitNet() {
 	CreateBinaryTree();
 }
 
+void cbowKernel(int *d_sen, int *sen, int *d_sent_len, int *sentence_length,
+		float alpha, int total_sent_len, int cnt_sentence, int blockSize, int streamIdx, cudaStream_t *stream)
+{
+	int gridSize = cnt_sentence;
+	checkCUDAerr(cudaMemcpyAsync(d_sen + streamIdx*total_sent_len, sen,
+				total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
+	checkCUDAerr(cudaMemcpyAsync(d_sent_len + streamIdx*(cnt_sentence+1),
+				sentence_length, (cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
+	cbow_kernel<<<gridSize, blockSize, 0, stream[streamIdx]>>>
+		(window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+		 d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+		 d_sen, d_sent_len, d_syn1, d_syn0);
+}
+
+void sgKernel(int *d_sen, int *sen, int *d_sent_len, int *sentence_length, int *d_negSample,
+		float alpha, int total_sent_len, int cnt_sentence, int blockSize, int streamIdx, cudaStream_t *stream)
+{
+	int gridSize = cnt_sentence;
+	checkCUDAerr(cudaMemcpyAsync(d_sen + streamIdx*total_sent_len, sen,
+				total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
+	checkCUDAerr(cudaMemcpyAsync(d_sent_len + streamIdx*(cnt_sentence+1), sentence_length,
+				(cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
+	if (negative == 5) {
+		__sgNeg<<<gridSize, blockSize, 0, stream[streamIdx]>>>
+			(window, layer1_size, negative, vocab_size, alpha,
+			 d_expTable, d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+	} else {
+		skip_gram_kernel<<<gridSize, blockSize, 0, stream[streamIdx]>>>
+			(window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+			 d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+			 d_sen, d_sent_len, d_syn1, d_syn0);
+	}
+}
+
+
 void TrainModelThread()
 {
 	long long word, word_count = 0, last_word_count = 0;
@@ -690,6 +724,10 @@ void TrainModelThread()
 	sentence_length = (int *)malloc((MAX_SENTENCE + 1) * sizeof(int));
 	checkCUDAerr(cudaMalloc((void **)&d_sen, MAX_SENTENCE * 20 * sizeof(int) * num_streams));
 	checkCUDAerr(cudaMalloc((void **)&d_sent_len, (MAX_SENTENCE + 1) * sizeof(int) * num_streams));
+
+	int *negSample = (int *)malloc(MAX_SENTENCE * negative * sizeof(int));
+	int *d_negSample;
+	checkCUDAerr(cudaMalloc(&d_negSample, MAX_SENTENCE * negative * sizeof(int)));
 
 	cudaStream_t *stream;
 	stream = (cudaStream_t *)malloc(num_streams * sizeof(cudaStream_t));
@@ -780,36 +818,15 @@ void TrainModelThread()
 			continue;
 		}
 
-		// Negative sampling in advance
-		int *negSample = (int *)malloc(cnt_sentence * negative * sizeof(int));
-		int *d_negSample;
-		// A sentence share negative samples
+		// Negative sampling in advance. A sentence share negative samples
 		for (int i=0; i<cnt_sentence * negative; i++) negSample[i] = table[rand() % table_size];
-		checkCUDAerr(cudaMalloc(&d_negSample, cnt_sentence * negative * sizeof(int)));
 		checkCUDAerr(cudaMemcpyAsync(d_negSample, negSample, cnt_sentence * negative * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
 
-		int gridSize = cnt_sentence;
-		if (cbow) {
-			checkCUDAerr(cudaMemcpyAsync(d_sen + streamIdx*total_sent_len, sen, total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
-			checkCUDAerr(cudaMemcpyAsync(d_sent_len + streamIdx*(cnt_sentence+1), sentence_length, (cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
-			cbow_kernel<<<gridSize, blockSize, 0, stream[streamIdx]>>>
-				(window, layer1_size, negative, hs, table_size, vocab_size, alpha,
-				 d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
-				 d_sen, d_sent_len, d_syn1, d_syn0);
-		} else {
-			checkCUDAerr(cudaMemcpyAsync(d_sen + streamIdx*total_sent_len, sen, total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
-			checkCUDAerr(cudaMemcpyAsync(d_sent_len + streamIdx*(cnt_sentence+1), sentence_length, (cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
-			if (negative == 5) {
-				__sgNeg<<<gridSize, blockSize, 0, stream[streamIdx]>>>
-					(window, layer1_size, negative, vocab_size, alpha,
-					 d_expTable, d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
-			} else {
-				skip_gram_kernel<<<gridSize, blockSize, 0, stream[streamIdx]>>>
-					(window, layer1_size, negative, hs, table_size, vocab_size, alpha,
-					 d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
-					 d_sen, d_sent_len, d_syn1, d_syn0);
-			}
-		}
+		if (cbow)
+			cbowKernel(d_sen, sen, d_sent_len, sentence_length, alpha, total_sent_len, cnt_sentence, blockSize, streamIdx, stream);
+		else
+			sgKernel(d_sen, sen, d_sent_len, sentence_length, d_negSample, alpha, total_sent_len, cnt_sentence, blockSize, streamIdx, stream);
+		
 		streamIdx = (streamIdx + 1) % num_streams;
 	}
 	cudaDeviceSynchronize();
@@ -818,8 +835,10 @@ void TrainModelThread()
 	fclose(fi);
 	free(sen);
 	free(sentence_length);
+	free(negSample);
 	cudaFree(d_sen);
 	cudaFree(d_sent_len);
+	cudaFree(d_negSample);
 }
 
 void TrainModel() {
@@ -835,6 +854,7 @@ void TrainModel() {
 	if (negative > 0) InitUnigramTable();
 
 	start = clock();
+	srand(time(NULL));
 
 	TrainModelThread();
 
