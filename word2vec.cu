@@ -32,7 +32,7 @@
 		exit(0);\
 	}\
 }
-#define BLOCKSIZE 512 
+#define BLOCKSIZE 512
 
 const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
 
@@ -434,10 +434,10 @@ int AddWordToVocab(char *word) {
 	strcpy(vocab[vocab_size].word, word);
 	vocab[vocab_size].cn = 0;
 	vocab_size++;
-	// floatlocate memory if needed
+	// reallocate memory if needed
 	if (vocab_size + 2 >= vocab_max_size) {
 		vocab_max_size += 1000;
-		vocab = (struct vocab_word *)floatloc(vocab, vocab_max_size * sizeof(struct vocab_word));
+		vocab = (struct vocab_word *)realloc(vocab, vocab_max_size * sizeof(struct vocab_word));
 	}
 	hash = GetWordHash(word);
 	while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
@@ -472,7 +472,7 @@ void SortVocab() {
 			train_words += vocab[a].cn;
 		}
 	}
-	vocab = (struct vocab_word *)floatloc(vocab, (vocab_size + 1) * sizeof(struct vocab_word));
+	vocab = (struct vocab_word *)realloc(vocab, (vocab_size + 1) * sizeof(struct vocab_word));
 	// Allocate memory for the binary tree construction
 	for (a = 0; a < vocab_size; a++) {
 		vocab[a].code = (char *)calloc(MAX_CODE_LENGTH, sizeof(char));
@@ -692,13 +692,14 @@ void cbowKernel(int *d_sen, int *sen, int *d_sent_len, int *sentence_length,
 void sgKernel(int *d_sen, int *sen, int *d_sent_len, int *sentence_length, int *d_negSample,
 		float alpha, int total_sent_len, int cnt_sentence, int blockSize, int streamIdx, cudaStream_t *stream)
 {
+	int _blockSize = layer1_size;
 	int gridSize = cnt_sentence;
 	checkCUDAerr(cudaMemcpyAsync(d_sen + streamIdx*total_sent_len, sen,
 				total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
 	checkCUDAerr(cudaMemcpyAsync(d_sent_len + streamIdx*(cnt_sentence+1), sentence_length,
 				(cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
 	if (negative == 5) {
-		__sgNeg<<<gridSize, blockSize, 0, stream[streamIdx]>>>
+		__sgNeg<<<gridSize, _blockSize, 0, stream[streamIdx]>>>
 			(window, layer1_size, negative, vocab_size, alpha,
 			 d_expTable, d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
 	} else {
@@ -836,9 +837,12 @@ void TrainModelThread()
 	checkCUDAerr(cudaMemcpy(syn0, d_syn0, vocab_size * layer1_size * sizeof(float), cudaMemcpyDeviceToHost));
 
 	fclose(fi);
+
+	// free memory
 	free(sen);
 	free(sentence_length);
 	free(negSample);
+	free(stream);
 	cudaFree(d_sen);
 	cudaFree(d_sent_len);
 	cudaFree(d_negSample);
@@ -864,6 +868,9 @@ void TrainModel() {
 	cudaFree(d_table);
 	cudaFree(d_syn1);
 	cudaFree(d_syn0);
+	cudaFree(d_vocab_codelen);
+	cudaFree(d_vocab_point);
+	cudaFree(d_vocab_code);
 
 	fo = fopen(output_file, "wb");
 	if (classes == 0) {	
@@ -1019,7 +1026,16 @@ int main(int argc, char **argv) {
 	TrainModel();
 
 	// memory free
+	free(vocab_codelen);
+	free(vocab_point);
+	free(vocab_code);
+	free(table);
+	free(syn0);
+	free(syn1);
+	free(syn1neg);
 	free(vocab);
+	free(vocab_hash);
+	free(expTable);
 	cudaFree(d_expTable);
 
 	return 0;
