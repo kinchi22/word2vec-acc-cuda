@@ -32,11 +32,9 @@
 		exit(0);\
 	}\
 }
-#define BLOCKSIZE 256 
+#define BLOCKSIZE 512 
 
 const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
-
-typedef float real;                    // Precision of float numbers
 
 struct vocab_word {
 	long long cn;
@@ -51,8 +49,8 @@ int binary = 0, cbow = 1, debug_mode = 2, window = 5, min_count = 5, num_streams
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long train_words = 0, word_count_actual = 0, iter = 5, file_size = 0, classes = 0;
-real alpha = 0.025, starting_alpha, sample = 1e-3;
-real *syn0, *syn1, *syn1neg, *expTable;
+float alpha = 0.025, starting_alpha, sample = 1e-3;
+float *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
 
 int hs = 0, negative = 5;
@@ -63,7 +61,7 @@ int *table;
 int *vocab_codelen, *vocab_point, *d_vocab_codelen, *d_vocab_point;
 char *vocab_code, *d_vocab_code;
 int *d_table;
-real *d_syn0, *d_syn1, *d_expTable;
+float *d_syn0, *d_syn1, *d_expTable;
 
 __global__ void __sgNeg(const int window, const int layer1_size, const int negative, const int vocab_size, float alpha,
 		const float* __restrict__ expTable, const int* __restrict__ sen, const int* __restrict__ sentence_length,
@@ -96,8 +94,8 @@ __global__ void __sgNeg(const int window, const int layer1_size, const int negat
 				if (d == 0) {      // positive sample
 					target = word;
 					label = 1; 
-				} else {           // neative sample
-					if (_negSample[d-1] == 0)    target = (_negSample[d-1]*2514903917 + 11) % (vocab_size - 1) + 1; 
+				} else {           // negative sample
+//					if (_negSample[d-1] == 0)    target = (_negSample[d-1]*2514903917 + 11) % (vocab_size - 1) + 1; 
 					if (_negSample[d-1] == word) continue;
 					target = _negSample[d-1];
 					label = 0; 
@@ -128,12 +126,12 @@ __global__ void __sgNeg(const int window, const int layer1_size, const int negat
 	}    
 }
 
-__global__ void skip_gram_kernel(int window, int layer1_size, int negative, int hs, int table_size, int vocab_size, real alpha,
-		const real* __restrict__ expTable, const int* __restrict__ table, 
+__global__ void skip_gram_kernel(int window, int layer1_size, int negative, int hs, int table_size, int vocab_size, float alpha,
+		const float* __restrict__ expTable, const int* __restrict__ table, 
 		const int* __restrict__ vocab_codelen, const int* __restrict__ vocab_point, const char* __restrict__ vocab_code,
-		const int* __restrict__ sen, const int* __restrict__ sentence_length, real *syn1, real *syn0)
+		const int* __restrict__ sen, const int* __restrict__ sentence_length, float *syn1, float *syn0)
 {
-	__shared__ real f[BLOCKSIZE/2], g;
+	__shared__ float f[BLOCKSIZE/2], g;
 
 	int sent_idx_s = sentence_length[blockIdx.x];
 	int sent_idx_e = sentence_length[blockIdx.x + 1]; 
@@ -142,7 +140,7 @@ __global__ void skip_gram_kernel(int window, int layer1_size, int negative, int 
 	if (threadIdx.x < layer1_size) for (int sentence_position = sent_idx_s; sentence_position < sent_idx_e; sentence_position++) {
 		int word = sen[sentence_position];
 		if (word == -1) continue;
-		real neu1e = 0;
+		float neu1e = 0;
 		next_random = next_random * (unsigned long)2514903917 + 11; 
 		int b = next_random % window;
 
@@ -223,12 +221,12 @@ __global__ void skip_gram_kernel(int window, int layer1_size, int negative, int 
 	}
 }
 
-__global__ void cbow_kernel(int window, int layer1_size, int negative, int hs, int table_size, int vocab_size, real alpha,
-		const real* __restrict__ expTable, const int* __restrict__ table,
+__global__ void cbow_kernel(int window, int layer1_size, int negative, int hs, int table_size, int vocab_size, float alpha,
+		const float* __restrict__ expTable, const int* __restrict__ table,
 		const int* __restrict__ vocab_codelen, const int* __restrict__ vocab_point, const char* __restrict__ vocab_code,
-		const int* __restrict__ sen, const int* __restrict__ sentence_length, real *syn1, real *syn0)
+		const int* __restrict__ sen, const int* __restrict__ sentence_length, float *syn1, float *syn0)
 {
-	__shared__ real f[BLOCKSIZE/2], g;
+	__shared__ float f[BLOCKSIZE/2], g;
 
 	int sent_idx_s = sentence_length[blockIdx.x];
 	int sent_idx_e = sentence_length[blockIdx.x + 1];
@@ -237,8 +235,8 @@ __global__ void cbow_kernel(int window, int layer1_size, int negative, int hs, i
 	if (threadIdx.x < layer1_size) for (int sentence_position = sent_idx_s; sentence_position < sent_idx_e; sentence_position++) {
 		int word = sen[sentence_position];
 		if (word == -1) continue;
-		real neu1 = 0;
-		real neu1e = 0;
+		float neu1 = 0;
+		float neu1e = 0;
 		next_random = next_random * (unsigned long)2514903917 + 11;
 		int b = next_random % window;
 
@@ -436,10 +434,10 @@ int AddWordToVocab(char *word) {
 	strcpy(vocab[vocab_size].word, word);
 	vocab[vocab_size].cn = 0;
 	vocab_size++;
-	// Reallocate memory if needed
+	// floatlocate memory if needed
 	if (vocab_size + 2 >= vocab_max_size) {
 		vocab_max_size += 1000;
-		vocab = (struct vocab_word *)realloc(vocab, vocab_max_size * sizeof(struct vocab_word));
+		vocab = (struct vocab_word *)floatloc(vocab, vocab_max_size * sizeof(struct vocab_word));
 	}
 	hash = GetWordHash(word);
 	while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
@@ -474,7 +472,7 @@ void SortVocab() {
 			train_words += vocab[a].cn;
 		}
 	}
-	vocab = (struct vocab_word *)realloc(vocab, (vocab_size + 1) * sizeof(struct vocab_word));
+	vocab = (struct vocab_word *)floatloc(vocab, (vocab_size + 1) * sizeof(struct vocab_word));
 	// Allocate memory for the binary tree construction
 	for (a = 0; a < vocab_size; a++) {
 		vocab[a].code = (char *)calloc(MAX_CODE_LENGTH, sizeof(char));
@@ -649,30 +647,30 @@ void ReadVocab() {
 void InitNet() {
 	long long a, b;
 	unsigned long long next_random = 1;
-	a = posix_memalign((void **)&syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
+	a = posix_memalign((void **)&syn0, 128, (long long)vocab_size * layer1_size * sizeof(float));
 	if (syn0 == NULL) {printf("Memory allocation failed\n"); exit(1);}
 	if (hs) {
-		a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
+		a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(float));
 		if (syn1 == NULL) {printf("Memory allocation failed\n"); exit(1);}
 		for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++)
 			syn1[a * layer1_size + b] = 0;
-		checkCUDAerr(cudaMalloc((void **)&d_syn1, (long long)vocab_size * layer1_size * sizeof(real)));
-		checkCUDAerr(cudaMemcpy(d_syn1, syn1, (long long)vocab_size * layer1_size * sizeof(real), cudaMemcpyHostToDevice));
+		checkCUDAerr(cudaMalloc((void **)&d_syn1, (long long)vocab_size * layer1_size * sizeof(float)));
+		checkCUDAerr(cudaMemcpy(d_syn1, syn1, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
 	}
 	if (negative>0) {
-		a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(real));
+		a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(float));
 		if (syn1neg == NULL) {printf("Memory allocation failed\n"); exit(1);}
 		for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++)
 			syn1neg[a * layer1_size + b] = 0;
-		checkCUDAerr(cudaMalloc((void **)&d_syn1, (long long)vocab_size * layer1_size * sizeof(real)));
-		checkCUDAerr(cudaMemcpy(d_syn1, syn1neg, (long long)vocab_size * layer1_size * sizeof(real), cudaMemcpyHostToDevice));
+		checkCUDAerr(cudaMalloc((void **)&d_syn1, (long long)vocab_size * layer1_size * sizeof(float)));
+		checkCUDAerr(cudaMemcpy(d_syn1, syn1neg, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
 	}
 	for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++) {
 		next_random = next_random * (unsigned long long)25214903917 + 11;
-		syn0[a * layer1_size + b] = (((next_random & 0xFFFF) / (real)65536) - 0.5) / layer1_size;
+		syn0[a * layer1_size + b] = (((next_random & 0xFFFF) / (float)65536) - 0.5) / layer1_size;
 	}
-	checkCUDAerr(cudaMalloc((void **)&d_syn0, (long long)vocab_size * layer1_size * sizeof(real)));
-	checkCUDAerr(cudaMemcpy(d_syn0, syn0, (long long)vocab_size * layer1_size * sizeof(real), cudaMemcpyHostToDevice));
+	checkCUDAerr(cudaMalloc((void **)&d_syn0, (long long)vocab_size * layer1_size * sizeof(float)));
+	checkCUDAerr(cudaMemcpy(d_syn0, syn0, (long long)vocab_size * layer1_size * sizeof(float), cudaMemcpyHostToDevice));
 
 	CreateBinaryTree();
 }
@@ -753,11 +751,11 @@ void TrainModelThread()
 			if ((debug_mode > 1)) {
 				now = clock();
 				printf("%cAlpha: %f  Progress: %.2f%%  Words/sec: %.2fk  ", 13, alpha,
-						word_count_actual / (real)(iter * train_words + 1) * 100,
-						word_count_actual / ((real)(now - start + 1) / (real)CLOCKS_PER_SEC * 1000));
+						word_count_actual / (float)(iter * train_words + 1) * 100,
+						word_count_actual / ((float)(now - start + 1) / (float)CLOCKS_PER_SEC * 1000));
 				fflush(stdout);
 			}
-			alpha = starting_alpha * (1 - word_count_actual / (real)(iter * train_words + 1));
+			alpha = starting_alpha * (1 - word_count_actual / (float)(iter * train_words + 1));
 			if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
 		}
 		total_sent_len = 0;
@@ -785,9 +783,9 @@ void TrainModelThread()
 					break;
 				}
 				if (sample > 0) {
-					real ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
+					float ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
 					int next_random_t = rand();
-					if (ran < (next_random_t & 0xFFFF) / (real)65536) continue;
+					if (ran < (next_random_t & 0xFFFF) / (float)65536) continue;
 				}
 				sen[total_sent_len] = word;
 				total_sent_len++;
@@ -819,7 +817,12 @@ void TrainModelThread()
 		}
 
 		// Negative sampling in advance. A sentence share negative samples
-		for (int i=0; i<cnt_sentence * negative; i++) negSample[i] = table[rand() % table_size];
+		for (int i=0; i<cnt_sentence * negative; i++) {
+			int randd = rand();
+			int tempSample = table[randd % table_size];
+			if (tempSample == 0) negSample[i] = randd % (vocab_size - 1) + 1;
+			else                 negSample[i] = tempSample;
+		}
 		checkCUDAerr(cudaMemcpyAsync(d_negSample, negSample, cnt_sentence * negative * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
 
 		if (cbow)
@@ -830,7 +833,7 @@ void TrainModelThread()
 		streamIdx = (streamIdx + 1) % num_streams;
 	}
 	cudaDeviceSynchronize();
-	checkCUDAerr(cudaMemcpy(syn0, d_syn0, vocab_size * layer1_size * sizeof(real), cudaMemcpyDeviceToHost));
+	checkCUDAerr(cudaMemcpy(syn0, d_syn0, vocab_size * layer1_size * sizeof(float), cudaMemcpyDeviceToHost));
 
 	fclose(fi);
 	free(sen);
@@ -868,7 +871,7 @@ void TrainModel() {
 		fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
 		for (a = 0; a < vocab_size; a++) {
 			fprintf(fo, "%s ", vocab[a].word);
-			if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn0[a * layer1_size + b], sizeof(real), 1, fo);
+			if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn0[a * layer1_size + b], sizeof(float), 1, fo);
 			else for (b = 0; b < layer1_size; b++) fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
 			fprintf(fo, "\n");
 		}
@@ -877,8 +880,8 @@ void TrainModel() {
 		int clcn = classes, iter = 10, closeid;
 		int *centcn = (int *)malloc(classes * sizeof(int));
 		int *cl = (int *)calloc(vocab_size, sizeof(int));
-		real closev, x;
-		real *cent = (real *)calloc(classes * layer1_size, sizeof(real));
+		float closev, x;
+		float *cent = (float *)calloc(classes * layer1_size, sizeof(float));
 
 		for (a = 0; a < vocab_size; a++) cl[a] = a % clcn;
 		for (a = 0; a < iter; a++) {
@@ -1004,19 +1007,19 @@ int main(int argc, char **argv) {
 
 	vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
 	vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
-	expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
+	expTable = (float *)malloc((EXP_TABLE_SIZE + 1) * sizeof(float));
 
 	for (i = 0; i < EXP_TABLE_SIZE; i++) {
-		expTable[i] = exp((i / (real)EXP_TABLE_SIZE * 2 - 1) * MAX_EXP); // Precompute the exp() table
+		expTable[i] = exp((i / (float)EXP_TABLE_SIZE * 2 - 1) * MAX_EXP); // Precompute the exp() table
 		expTable[i] = expTable[i] / (expTable[i] + 1);                   // Precompute f(x) = x / (x + 1)
 	}
-	// FOR CUDA
-	checkCUDAerr(cudaMalloc((void **)&d_expTable, (EXP_TABLE_SIZE + 1) * sizeof(real)));
-	checkCUDAerr(cudaMemcpy(d_expTable, expTable, (EXP_TABLE_SIZE + 1) * sizeof(real), cudaMemcpyHostToDevice));
+	checkCUDAerr(cudaMalloc((void **)&d_expTable, (EXP_TABLE_SIZE + 1) * sizeof(float)));
+	checkCUDAerr(cudaMemcpy(d_expTable, expTable, (EXP_TABLE_SIZE + 1) * sizeof(float), cudaMemcpyHostToDevice));
 
 	TrainModel();
 
-	// free device global memory
+	// memory free
+	free(vocab);
 	cudaFree(d_expTable);
 
 	return 0;
