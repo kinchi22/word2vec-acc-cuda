@@ -32,7 +32,6 @@
 		exit(0);\
 	}\
 }
-#define BLOCKSIZE 512
 
 const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
 
@@ -63,11 +62,12 @@ char *vocab_code, *d_vocab_code;
 int *d_table;
 float *d_syn0, *d_syn1, *d_expTable;
 
+template<unsigned int FSIZE>
 __global__ void __sgNeg(const int window, const int layer1_size, const int negative, const int vocab_size, float alpha,
 		const float* __restrict__ expTable, const int* __restrict__ sen, const int* __restrict__ sentence_length,
 		float *syn1, float *syn0, const int *negSample)
 {
-	__shared__ float f[BLOCKSIZE/2], g;
+	__shared__ float f[FSIZE], g;
 
 	int sentIdx_s = sentence_length[blockIdx.x];
 	int sentIdx_e = sentence_length[blockIdx.x + 1];
@@ -102,11 +102,11 @@ __global__ void __sgNeg(const int window, const int layer1_size, const int negat
 				}
 				int l2 = target * layer1_size;
 
-				if (threadIdx.x <  BLOCKSIZE/2) f[threadIdx.x] = syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
+				if (threadIdx.x <  FSIZE) f[threadIdx.x] = syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
 				__syncthreads();
-				if (threadIdx.x >= BLOCKSIZE/2) f[threadIdx.x%(BLOCKSIZE/2)] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
+				if (threadIdx.x >= FSIZE) f[threadIdx.x%(FSIZE)] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
 				__syncthreads();
-				for (int i=(BLOCKSIZE/4); i>0; i/=2) {
+				for (int i=(FSIZE/2); i>0; i/=2) {
 					if(threadIdx.x < i) f[threadIdx.x] += f[i + threadIdx.x];
 					__syncthreads();
 				}
@@ -126,12 +126,13 @@ __global__ void __sgNeg(const int window, const int layer1_size, const int negat
 	}    
 }
 
+template<unsigned int FSIZE>
 __global__ void skip_gram_kernel(int window, int layer1_size, int negative, int hs, int table_size, int vocab_size, float alpha,
 		const float* __restrict__ expTable, const int* __restrict__ table, 
 		const int* __restrict__ vocab_codelen, const int* __restrict__ vocab_point, const char* __restrict__ vocab_code,
 		const int* __restrict__ sen, const int* __restrict__ sentence_length, float *syn1, float *syn0)
 {
-	__shared__ float f[BLOCKSIZE/2], g;
+	__shared__ float f[FSIZE], g;
 
 	int sent_idx_s = sentence_length[blockIdx.x];
 	int sent_idx_e = sentence_length[blockIdx.x + 1]; 
@@ -157,11 +158,11 @@ __global__ void skip_gram_kernel(int window, int layer1_size, int negative, int 
 			if (hs) for (int d = vocab_codelen[word]; d < vocab_codelen[word+1]; d++) {
 				int l2 = vocab_point[d] * layer1_size;
 
-				if (threadIdx.x <  BLOCKSIZE/2) f[threadIdx.x] = syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2];
+				if (threadIdx.x <  FSIZE) f[threadIdx.x] = syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2];
 				__syncthreads();
-				if (threadIdx.x >= BLOCKSIZE/2) f[threadIdx.x%(BLOCKSIZE/2)] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2];
+				if (threadIdx.x >= FSIZE) f[threadIdx.x%(FSIZE)] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2];
 				__syncthreads();
-				for (int i=(BLOCKSIZE/4); i>0; i/=2) {
+				for (int i=(FSIZE/2); i>0; i/=2) {
 					if (threadIdx.x < i) f[threadIdx.x] += f[i + threadIdx.x];
 					__syncthreads();
 				}
@@ -193,11 +194,11 @@ __global__ void skip_gram_kernel(int window, int layer1_size, int negative, int 
 				}
 				int l2 = target * layer1_size;
 
-				if (threadIdx.x <  BLOCKSIZE/2) f[threadIdx.x] = syn0[threadIdx.x +l1] * syn1[threadIdx.x + l2];
+				if (threadIdx.x <  FSIZE) f[threadIdx.x] = syn0[threadIdx.x +l1] * syn1[threadIdx.x + l2];
 				__syncthreads();
-				if (threadIdx.x >= BLOCKSIZE/2) f[threadIdx.x%(BLOCKSIZE/2)] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2];
+				if (threadIdx.x >= FSIZE) f[threadIdx.x%(FSIZE)] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2];
 				__syncthreads();
-				for (int i=(BLOCKSIZE/4); i>0; i/=2) {
+				for (int i=(FSIZE/2); i>0; i/=2) {
 					if (threadIdx.x < i)
 						f[threadIdx.x] += f[i + threadIdx.x];
 					__syncthreads();
@@ -221,12 +222,13 @@ __global__ void skip_gram_kernel(int window, int layer1_size, int negative, int 
 	}
 }
 
+template<unsigned int FSIZE>
 __global__ void cbow_kernel(int window, int layer1_size, int negative, int hs, int table_size, int vocab_size, float alpha,
 		const float* __restrict__ expTable, const int* __restrict__ table,
 		const int* __restrict__ vocab_codelen, const int* __restrict__ vocab_point, const char* __restrict__ vocab_code,
 		const int* __restrict__ sen, const int* __restrict__ sentence_length, float *syn1, float *syn0)
 {
-	__shared__ float f[BLOCKSIZE/2], g;
+	__shared__ float f[FSIZE], g;
 
 	int sent_idx_s = sentence_length[blockIdx.x];
 	int sent_idx_e = sentence_length[blockIdx.x + 1];
@@ -258,11 +260,11 @@ __global__ void cbow_kernel(int window, int layer1_size, int negative, int hs, i
 			if (hs) for (int d = vocab_codelen[word]; d < vocab_codelen[word+1]; d++) {
 				int l2 = vocab_point[d] * layer1_size;
 
-				if (threadIdx.x <  BLOCKSIZE/2) f[threadIdx.x] = neu1 * syn1[threadIdx.x + l2];
+				if (threadIdx.x <  FSIZE) f[threadIdx.x] = neu1 * syn1[threadIdx.x + l2];
 				__syncthreads();
-				if (threadIdx.x >= BLOCKSIZE/2) f[threadIdx.x%(BLOCKSIZE/2)] += neu1 * syn1[threadIdx.x + l2];
+				if (threadIdx.x >= FSIZE) f[threadIdx.x%(FSIZE)] += neu1 * syn1[threadIdx.x + l2];
 				__syncthreads();
-				for (int i=(BLOCKSIZE/4); i>0; i/=2) {
+				for (int i=(FSIZE/2); i>0; i/=2) {
 					if (threadIdx.x < i)
 						f[threadIdx.x] += f[i + threadIdx.x];
 					__syncthreads();
@@ -295,11 +297,11 @@ __global__ void cbow_kernel(int window, int layer1_size, int negative, int hs, i
 				}
 				int l2 = target * layer1_size;
 
-				if (threadIdx.x <  BLOCKSIZE/2) f[threadIdx.x] = neu1 * syn1[threadIdx.x + l2];
+				if (threadIdx.x <  FSIZE) f[threadIdx.x] = neu1 * syn1[threadIdx.x + l2];
 				__syncthreads();
-				if (threadIdx.x >= BLOCKSIZE/2) f[threadIdx.x%(BLOCKSIZE/2)] += neu1 * syn1[threadIdx.x + l2];
+				if (threadIdx.x >= FSIZE) f[threadIdx.x%(FSIZE)] += neu1 * syn1[threadIdx.x + l2];
 				__syncthreads();
-				for (int i=(BLOCKSIZE/4); i>0; i/=2) {
+				for (int i=(FSIZE/2); i>0; i/=2) {
 					if (threadIdx.x < i)
 						f[threadIdx.x] += f[i + threadIdx.x];
 					__syncthreads();
@@ -683,10 +685,27 @@ void cbowKernel(int *d_sen, int *sen, int *d_sent_len, int *sentence_length,
 				total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
 	checkCUDAerr(cudaMemcpyAsync(d_sent_len + streamIdx*(cnt_sentence+1),
 				sentence_length, (cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
-	cbow_kernel<<<gridSize, blockSize, 0, stream[streamIdx]>>>
-		(window, layer1_size, negative, hs, table_size, vocab_size, alpha,
-		 d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
-		 d_sen, d_sent_len, d_syn1, d_syn0);
+	switch(blockSize) {
+		case 128: cbow_kernel<64><<<gridSize, blockSize, 0, stream[streamIdx]>>>
+				  (window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+				   d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+				   d_sen, d_sent_len, d_syn1, d_syn0);
+				  break;
+		case 256: cbow_kernel<128><<<gridSize, blockSize, 0, stream[streamIdx]>>>
+				  (window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+				   d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+				   d_sen, d_sent_len, d_syn1, d_syn0);
+				  break;
+		case 512: cbow_kernel<256><<<gridSize, blockSize, 0, stream[streamIdx]>>>
+				  (window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+				   d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+				   d_sen, d_sent_len, d_syn1, d_syn0);
+				  break;
+		default: printf("Can't support on layer size = %d\n", layer1_size);
+				 exit(1);
+				 break;
+	}
+				  
 }
 
 void sgKernel(int *d_sen, int *sen, int *d_sent_len, int *sentence_length, int *d_negSample,
@@ -698,18 +717,48 @@ void sgKernel(int *d_sen, int *sen, int *d_sent_len, int *sentence_length, int *
 				total_sent_len * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
 	checkCUDAerr(cudaMemcpyAsync(d_sent_len + streamIdx*(cnt_sentence+1), sentence_length,
 				(cnt_sentence + 1) * sizeof(int), cudaMemcpyHostToDevice, stream[streamIdx]));
-	if (negative == 5) {
-		__sgNeg<<<gridSize, _blockSize, 0, stream[streamIdx]>>>
-			(window, layer1_size, negative, vocab_size, alpha,
-			 d_expTable, d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+
+	if (negative == 5) { // A sentence share negative samples
+		switch(blockSize) {
+			case 128: __sgNeg<64><<<gridSize, _blockSize, 0, stream[streamIdx]>>>
+					  (window, layer1_size, negative, vocab_size, alpha,
+					   d_expTable, d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+					  break;
+			case 256: __sgNeg<128><<<gridSize, _blockSize, 0, stream[streamIdx]>>>
+					  (window, layer1_size, negative, vocab_size, alpha,
+					   d_expTable, d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+					  break;
+			case 512: __sgNeg<256><<<gridSize, _blockSize, 0, stream[streamIdx]>>>
+					  (window, layer1_size, negative, vocab_size, alpha,
+					   d_expTable, d_sen, d_sent_len, d_syn1, d_syn0, d_negSample);
+					  break;
+			default: printf("Can't support on layer size = %d\n", layer1_size);
+					 exit(1);
+					 break;
+		}
 	} else {
-		skip_gram_kernel<<<gridSize, blockSize, 0, stream[streamIdx]>>>
-			(window, layer1_size, negative, hs, table_size, vocab_size, alpha,
-			 d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
-			 d_sen, d_sent_len, d_syn1, d_syn0);
+		switch(blockSize) {
+			case 128: skip_gram_kernel<64><<<gridSize, blockSize, 0, stream[streamIdx]>>>
+					  (window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+					   d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+					   d_sen, d_sent_len, d_syn1, d_syn0);
+					  break;
+			case 256: skip_gram_kernel<128><<<gridSize, blockSize, 0, stream[streamIdx]>>>
+					  (window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+					   d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+					   d_sen, d_sent_len, d_syn1, d_syn0);
+					  break;
+			case 512: skip_gram_kernel<256><<<gridSize, blockSize, 0, stream[streamIdx]>>>
+					  (window, layer1_size, negative, hs, table_size, vocab_size, alpha,
+					   d_expTable, d_table, d_vocab_codelen, d_vocab_point, d_vocab_code,
+					   d_sen, d_sent_len, d_syn1, d_syn0);
+					  break;
+			default: printf("Can't support on layer size = %d\n", layer1_size);
+					 exit(1);
+					 break;
+		}
 	}
 }
-
 
 void TrainModelThread()
 {
@@ -735,10 +784,6 @@ void TrainModelThread()
 
 	while (blockSize < layer1_size) {
 		blockSize *= 2;
-		if(blockSize > BLOCKSIZE) {
-			printf("Vector size must be less than 256\n");
-			exit(1);
-		}
 	}
 
 	clock_t now;
