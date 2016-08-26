@@ -62,6 +62,15 @@ char *vocab_code, *d_vocab_code;
 int *d_table;
 float *d_syn0, *d_syn1, *d_expTable;
 
+__device__ void warpReduce(volatile float* sdata, int tid) {
+	sdata[tid] += sdata[tid + 32];
+	sdata[tid] += sdata[tid + 16];
+	sdata[tid] += sdata[tid + 8];
+	sdata[tid] += sdata[tid + 4];
+	sdata[tid] += sdata[tid + 2];
+	sdata[tid] += sdata[tid + 1];
+}
+
 template<unsigned int FSIZE>
 __global__ void __sgNeg(const int window, const int layer1_size, const int negative, const int vocab_size, float alpha,
 		const float* __restrict__ expTable, const int* __restrict__ sen, const int* __restrict__ sentence_length,
@@ -104,12 +113,15 @@ __global__ void __sgNeg(const int window, const int layer1_size, const int negat
 
 				if (threadIdx.x <  FSIZE) f[threadIdx.x] = syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
 				__syncthreads();
-				if (threadIdx.x >= FSIZE) f[threadIdx.x%(FSIZE)] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
+				if (threadIdx.x >= FSIZE) f[threadIdx.x % FSIZE] += syn0[threadIdx.x + l1] * syn1[threadIdx.x + l2]; 
 				__syncthreads();
-				for (int i=(FSIZE/2); i>0; i/=2) {
-					if(threadIdx.x < i) f[threadIdx.x] += f[i + threadIdx.x];
+				for (int s=(FSIZE/2); s>32; s/=2) {
+					if(threadIdx.x < s) f[threadIdx.x] += f[threadIdx.x + s];
 					__syncthreads();
 				}
+
+				// Unroll the last warp
+				if (threadIdx.x < 32) warpReduce(f, threadIdx.x);
 
 				if (threadIdx.x == 0) { 
 					if      (f[0] >  MAX_EXP) g = (label - 1) * alpha;
