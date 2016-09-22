@@ -98,7 +98,7 @@ __global__ void __sgNeg(const int window, const int layer1_size, const int negat
 			int l1 = last_word * layer1_size;
 			neu1e = 0; 
 
-			for (int d=0; d<negative; d++) {
+			for (int d=0; d<negative+1; d++) {
 				int target, label;
 				if (d == 0) {      // positive sample
 					target = word;
