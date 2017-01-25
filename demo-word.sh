@@ -16,4 +16,4 @@ if [ ! -e data.txt ]; then
   done
 fi
 
-time ./word2vec -train data.txt -output vectors.bin -cbow 0 -size 300 -window 5 -negative 5 -hs 0 -sample 1e-4 -streams 1 -binary 1 -iter 5
+time ./word2vec -train data.txt -output vectors.bin -cbow 0 -size 300 -window 5 -negative 5 -reuse-neg 1 -hs 0 -sample 1e-4 -binary 1 -iter 5
