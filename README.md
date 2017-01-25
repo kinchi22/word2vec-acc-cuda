@@ -12,3 +12,9 @@ Usage
 ----------
 The script ‘demo-word.sh’ downloads pre-processed text dataset(1.7G) has almost 1 billion words.
 The usage is almost same with google’s word2vec because it based on it. You can get more information about word2vec at https://code.google.com/p/word2vec/
+
+Re-use negative samples
+----------
+Set '-reuse-neg 1' in script for re-using negative samples.
+A sentence shares a negative sample set.
+It can train faster but it could be losing accuracy a little.
